@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yuzukodama — pixel grove</title>
+<meta name="description" content="a 3D pixel-art tree that grows while you watch. four seasons, one spirit.">
+<meta property="og:title" content="yuzukodama — pixel grove">
+<meta property="og:description" content="a 3D pixel-art tree that grows while you watch. drag to orbit, click to shake.">
+<style>
+  :root{ --ink:#e9e4d6; --dim:#8d8672; --gold:#ffd400; --faint:#565248;
+    --mono:'JetBrains Mono',ui-monospace,'Cascadia Code',monospace; }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  html,body{background:#07090c;color:var(--ink);font-family:var(--mono);font-weight:300;overflow-x:hidden}
+  ::selection{background:var(--gold);color:#000}
+
+  /* the 3d canvas, upscaled with hard pixels */
+  #stage{position:fixed;inset:0;z-index:0;width:100vw;height:100vh;display:block;
+    image-rendering:pixelated;image-rendering:crisp-edges;cursor:grab}
+  #stage:active{cursor:grabbing}
+  #tint{position:fixed;inset:0;z-index:1;pointer-events:none;
+    background:radial-gradient(ellipse at 50% 42%, transparent 55%, rgba(0,0,0,.42) 100%)}
+
+  main{position:relative;z-index:2;height:420vh}
+  .season{position:sticky;top:0;height:100vh;display:flex;align-items:center;
+    justify-content:flex-end;padding:0 7vw;pointer-events:none}
+  /* card frame with hand-rolled border-beam (idea from libraries.dev / Jakub Antalik — reimplemented vanilla) */
+  .card{pointer-events:auto;max-width:440px;position:relative;border-radius:22px;padding:2px;
+    background:rgba(255,255,255,.06);
+    opacity:0;transform:translateY(26px);filter:blur(6px);
+    transition:opacity .9s cubic-bezier(.32,.72,0,1),transform .9s cubic-bezier(.32,.72,0,1),filter .9s cubic-bezier(.32,.72,0,1)}
+  .season.seen .card{opacity:1;transform:none;filter:none}
+  .card::before{ /* the beam: a rotating conic highlight masked to the border ring */
+    content:"";position:absolute;inset:0;border-radius:22px;padding:2px;
+    background:conic-gradient(from var(--beam,0deg), transparent 0 70deg, rgba(255,212,0,.9) 88deg, #fff 92deg, rgba(255,212,0,.9) 96deg, transparent 120deg 360deg);
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor;mask-composite:exclude;
+    opacity:0;transition:opacity .6s ease;
+    animation:beamspin 5.2s linear infinite;
+  }
+  .season.seen .card::before{opacity:1}
+  @property --beam{syntax:'<angle>';initial-value:0deg;inherits:false}
+  @keyframes beamspin{to{--beam:360deg}}
+  .card .inner{background:rgba(7,9,11,.72);border-radius:20px;padding:26px 28px;
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+  .eyebrow{font-size:10px;letter-spacing:.34em;text-transform:uppercase;color:var(--dim);margin-bottom:14px}
+  .eyebrow b{color:var(--gold);font-weight:400}
+  h2{font-size:clamp(21px,2.8vw,29px);font-weight:700;line-height:1.25;margin-bottom:14px}
+  h2 em{font-style:normal;color:var(--gold)}
+  .card p{font-size:13.5px;line-height:1.8;color:rgba(233,228,214,.85);margin-bottom:12px;max-width:56ch}
+  .card p:last-child{margin-bottom:0}
+  .card a{color:inherit;text-decoration:none;border-bottom:1px dotted var(--dim)}
+  .card a:hover{color:var(--gold);border-color:var(--gold)}
+  .pills{display:flex;gap:9px;flex-wrap:wrap;margin-top:16px}
+  .pill{font-size:10.5px;letter-spacing:.14em;color:rgba(233,228,214,.88);
+    border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:8px 14px;
+    background:rgba(255,255,255,.05);text-decoration:none;
+    transition:all .5s cubic-bezier(.32,.72,0,1)}
+  .pill:hover{background:rgba(255,212,0,.14);border-color:rgba(255,212,0,.5);color:var(--gold);transform:translateY(-1px)}
+
+  #hero{position:fixed;top:6.5vh;left:0;right:0;z-index:3;text-align:center;pointer-events:none;transition:opacity .7s ease}
+  #hero.fade{opacity:0}
+  #hero .big{font-size:clamp(30px,5.2vw,52px);font-weight:700;letter-spacing:.14em;text-shadow:0 2px 24px rgba(0,0,0,.9)}
+  #hero .big em{font-style:normal;color:var(--gold)}
+  #hero .under{font-size:11px;letter-spacing:.42em;color:var(--dim);margin-top:12px}
+
+  #vine{position:fixed;right:26px;top:50%;transform:translateY(-50%);z-index:4;
+    display:flex;flex-direction:column;gap:16px;align-items:center}
+  #vine .node{width:9px;height:9px;border-radius:50%;border:1px solid rgba(255,255,255,.25);
+    background:transparent;cursor:pointer;padding:0;transition:all .5s cubic-bezier(.32,.72,0,1)}
+  #vine .node.on{background:var(--gold);border-color:var(--gold);transform:scale(1.3);box-shadow:0 0 12px rgba(255,212,0,.5)}
+  #vine .lbl{writing-mode:vertical-rl;font-size:9px;letter-spacing:.4em;color:var(--dim)}
+
+  #hud{position:fixed;bottom:22px;left:24px;z-index:4;font-size:11px;letter-spacing:.2em;
+    color:var(--ink);background:rgba(7,9,11,.55);border:1px solid rgba(255,255,255,.1);
+    border-radius:12px;padding:9px 15px;backdrop-filter:blur(12px)}
+  #hud b{color:var(--gold);font-weight:400}
+
+  #intro{position:fixed;inset:0;z-index:40;background:#07090c;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:18px;cursor:pointer;transition:opacity 1s ease;
+    text-align:center;padding:0 8vw}
+  #intro.off{opacity:0;pointer-events:none}
+  #intro .t{font-size:clamp(25px,4.4vw,42px);font-weight:700;letter-spacing:.16em}
+  #intro .t em{font-style:normal;color:var(--gold)}
+  #intro .s{font-size:11px;letter-spacing:.4em;color:var(--dim)}
+  #intro .go{border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:12px 30px;
+    font-size:12px;letter-spacing:.3em;margin-top:8px;transition:all .5s cubic-bezier(.32,.72,0,1)}
+  #intro:hover .go{border-color:var(--gold);color:var(--gold);transform:scale(1.04)}
+  #intro .d{font-size:11px;color:var(--faint);max-width:52ch;line-height:1.9}
+
+  #hint{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);z-index:4;
+    font-size:10px;letter-spacing:.3em;color:var(--dim);pointer-events:none;transition:opacity 1s ease}
+  #hint.off{opacity:0}
+  footer{position:fixed;bottom:20px;right:26px;z-index:4;font-size:9px;letter-spacing:.3em;color:var(--dim)}
+  #credit{position:fixed;bottom:40px;right:26px;z-index:4;font-size:8px;letter-spacing:.12em;color:var(--faint)}
+  @media(max-width:760px){ .season{justify-content:center;padding:0 5vw} #vine,#hud,footer,#credit{display:none} }
+</style>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+<div id="tint"></div>
+
+<div id="hero">
+  <div class="big">YUZU<em>KODAMA</em></div>
+  <div class="under">a tree that grows when you open the page</div>
+</div>
+
+<div id="intro">
+  <div class="t">PIXEL <em>GROVE</em></div>
+  <div class="s">yuzukodama · personal site</div>
+  <div class="d">a little 3D grove that grows while you're here. it turns through the seasons as you scroll —
+  drag to look around, click the tree to shake it, stay a while.</div>
+  <div class="go">PLANT IT ▸</div>
+</div>
+
+<main>
+  <section class="season" id="s0">
+    <div class="card"><div class="inner">
+      <div class="eyebrow">SPRING · <b>WHO</b></div>
+      <h2>the spirit in the <em>grove</em></h2>
+      <p>I'm <a href="https://github.com/yuzukodama">yuzukodama</a> — named for the kodama,
+      spirits that live in old trees and only show themselves to people quiet enough to notice.</p>
+      <p>The tree is the honest version of me: a seed of code that kept growing. Shake it and something falls.</p>
+    </div></div>
+  </section>
+  <section class="season" id="s1">
+    <div class="card"><div class="inner">
+      <div class="eyebrow">SUMMER · <b>WORK</b></div>
+      <h2>what the grove <em>bears</em></h2>
+      <p>Tools built and measured in public —
+      <a href="https://github.com/GaelicThunder/terse-reasoning">terse-reasoning</a> ·
+      <a href="https://github.com/GaelicThunder/moe-decode-gb10">moe-decode-gb10</a> ·
+      <a href="https://github.com/GaelicThunder/moe-offload-findings">moe-offload-findings</a> ·
+      <a href="https://github.com/GaelicThunder/gb10-uma-inference-notes">gb10-uma-inference-notes</a>.</p>
+      <p>The golden fruit in the canopy is the work. Shake the tree and pick some.</p>
+    </div></div>
+  </section>
+  <section class="season" id="s2">
+    <div class="card"><div class="inner">
+      <div class="eyebrow">AUTUMN · <b>HOW</b></div>
+      <h2>the method is <em>boring</em>, on purpose</h2>
+      <p>Run it. Write down the number. Run it again in case the number lies.
+      Publish the ugly runs too — failures are the part people actually need.</p>
+      <div class="pills">
+        <span class="pill">3D space colonization</span>
+        <span class="pill">GPU-instanced leaves</span>
+        <span class="pill">pixel-perfect upscale</span>
+      </div>
+    </div></div>
+  </section>
+  <section class="season" id="s3">
+    <div class="card"><div class="inner">
+      <div class="eyebrow">WINTER · <b>REACH</b></div>
+      <h2>find me under the <em>snow</em></h2>
+      <p>The grove sleeps; I don't. Transmissions usually answered within a day.</p>
+      <div class="pills">
+        <a class="pill" href="https://github.com/yuzukodama" target="_blank" rel="noopener">github</a>
+        <a class="pill" href="https://x.com/Gael_DDOS" target="_blank" rel="noopener">x / twitter</a>
+        <a class="pill" href="mailto:yuzu.kodama@gmx.com">mail</a>
+      </div>
+    </div></div>
+  </section>
+</main>
+
+<div id="vine">
+  <button class="node on" data-s="0" aria-label="spring"></button>
+  <button class="node" data-s="1" aria-label="summer"></button>
+  <button class="node" data-s="2" aria-label="autumn"></button>
+  <button class="node" data-s="3" aria-label="winter"></button>
+  <div class="lbl">SEASONS</div>
+</div>
+
+<div id="hud">shakes <b id="nstones">0</b></div>
+<div id="hint">drag to look around · click the tree · scroll for seasons</div>
+<footer>grown, not built</footer>
+<div id="credit">built with three.js · thanks to J. Antalik for the border idea</div>
+
+<script>
+/* error surface for module deaths + CDN fallback loader */
+window.__err = window.__err || '';
+addEventListener('error', e=>{ window.__err += ' win:'+(e.message||'')+' | '; });
+</script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three-jsd": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+window.__GROVEVER = 33;
+window.__frames = 0;
+window.__err = '';
+
+try{
+
+/* ================= renderer ================= */
+const stage = document.getElementById('stage');
+const PIX = 3.2;                        // pixel size — the whole aesthetic
+const renderer = new THREE.WebGLRenderer({canvas:stage, antialias:false, alpha:false});
+renderer.setPixelRatio(1);
+function resize(){
+  renderer.setSize(Math.floor(innerWidth/PIX), Math.floor(innerHeight/PIX), false);
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+}
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#0b1420');
+scene.fog = new THREE.Fog('#0b1420', 26, 60);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 120);
+const cam = {yaw: 0.0, pitch: 0.22, dist: 21, tyaw:0, tpitch:0.22, tdist:21};
+function placeCam(){
+  camera.position.set(
+    Math.sin(cam.yaw)*Math.cos(cam.pitch)*cam.dist,
+    5.2 + Math.sin(cam.pitch)*cam.dist,
+    Math.cos(cam.yaw)*Math.cos(cam.pitch)*cam.dist);
+  camera.lookAt(1.8, 5.4, 0);
+}
+
+/* lights */
+const moon = new THREE.DirectionalLight('#bcd2ff', 1.15); moon.position.set(-8, 14, -6); scene.add(moon);
+const amb  = new THREE.AmbientLight('#2a3550', 1.1); scene.add(amb);
+const warm = new THREE.PointLight('#ffd400', 0, 22); warm.position.set(0, 5.4, 0); scene.add(warm); // fruit glow, summer
+
+/* ground: dark disc with a soft edge */
+{
+  const g = new THREE.CircleGeometry(30, 40);
+  const m = new THREE.MeshLambertMaterial({color:'#0a1410'});
+  const ground = new THREE.Mesh(g,m); ground.rotation.x = -Math.PI/2; scene.add(ground);
+}
+/* ring of background hills (big low cones) for depth */
+for(let i=0;i<9;i++){
+  const a = i/9*Math.PI*2 + 0.3;
+  const c = new THREE.Mesh(new THREE.ConeGeometry(5+Math.random()*4, 5+Math.random()*6, 5),
+    new THREE.MeshLambertMaterial({color:'#0c1613'}));
+  c.position.set(Math.sin(a)*34, 0, Math.cos(a)*34); scene.add(c);
+}
+
+/* ================= SPACE COLONIZATION in 3D (authored) ================= */
+let seed = (Date.now()%2147483647)|0; if(seed<=0) seed+=2147483646;
+function rnd(){ seed = (seed*48271)%2147483647; return (seed-1)/2147483646; }
+
+const BR = [];    // {ax,ay,az, bx,by,bz (tip), p, d, len}
+const ATT = [];
+const CROWN = {y: 7.4, rx: 4.6, ry: 2.6};
+function seedCrown(){
+  ATT.length = 0;
+  for(let i=0;i<520;i++){
+    const a=rnd()*Math.PI*2, r=Math.pow(rnd(),0.55);
+    ATT.push({x:Math.cos(a)*r*CROWN.rx, y:CROWN.y + Math.sin(a)*r*CROWN.ry, z:Math.sin(a)*r*CROWN.rx, alive:true});
+  }
+}
+function growTree(){
+  const LOOK=1.35, KILL=0.42, STEP=0.34;
+  BR.push({ax:0,ay:0,az:0, bx:0,by:0,bz:0, p:-1, d:0, len:0});
+  /* trunk climb */
+  let tip={x:0,y:0,z:0}, idx=0, d=0;
+  for(let s=0;s<26;s++){
+    const dx=-tip.x, dy=(CROWN.y-0.4)-tip.y, dz=-tip.z;
+    const L=Math.hypot(dx,dy,dz)||1;
+    if(L<LOOK*1.1) break;
+    const wob=Math.sin(s*0.7)*0.10;
+    const nb={ax:tip.x,ay:tip.y,az:tip.z,
+      bx:tip.x+(dx/L)*0.55+wob, by:tip.y+(dy/L)*0.55, bz:tip.z+(dz/L)*0.55+wob*0.6,
+      p:idx, d:Math.min(6,1+(s>>2)), len:0.55};
+    BR.push(nb); idx=BR.length-1; tip={x:nb.bx,y:nb.by,z:nb.bz}; d=nb.d;
+  }
+  /* recursive branching */
+  function branch(x,y,z, pd, depth, energy, parentIdx){
+    if(energy<=0||depth>40) return;
+    let best=-1, bd=Infinity;
+    for(let i=0;i<ATT.length;i++){
+      const a=ATT[i]; if(!a.alive) continue;
+      const ddx=a.x-x, ddy=a.y-y, ddz=a.z-z, d2=ddx*ddx+ddy*ddy+ddz*ddz;
+      if(d2<KILL*KILL){ a.alive=false; continue; }
+      if(d2<LOOK*LOOK && d2<bd){ bd=d2; best=i; }
+    }
+    if(best<0){
+      /* drift toward crown center and retry once */
+      const c=new THREE.Vector3(0,CROWN.y,0).sub(new THREE.Vector3(x,y,z));
+      if(c.length()<0.5 || depth>30) return;
+      const dir2=c.normalize();
+      const nx=x+dir2.x*STEP, ny=y+dir2.y*STEP, nz=z+dir2.z*STEP;
+      BR.push({ax:x,ay:y,az:z, bx:nx,by:ny,bz:nz, p:parentIdx, d:depth, len:STEP});
+      branch(nx,ny,nz,{x,y,z},depth+1,energy-1,BR.length-1);
+      return;
+    }
+    const A=ATT[best];
+    let want=new THREE.Vector3(A.x-x,A.y-y,A.z-z).normalize();
+    const prev=new THREE.Vector3(x-pd.x, y-pd.y, z-pd.z).normalize();
+    const dir=prev.multiplyScalar(0.25).add(want.multiplyScalar(0.75)).normalize();
+    const nx=x+dir.x*STEP, ny=y+dir.y*STEP, nz=z+dir.z*STEP;
+    BR.push({ax:x,ay:y,az:z, bx:nx,by:ny,bz:nz, p:parentIdx, d:depth, len:STEP});
+    branch(nx,ny,nz, {x,y,z}, depth+1, energy-1, BR.length-1);
+    if(depth>=6 && energy>16){
+      /* side split: another point at a wide angle */
+      let side=-1, sd=Infinity;
+      for(let i=0;i<ATT.length;i++){
+        const a=ATT[i]; if(!a.alive) continue;
+        const ddx=a.x-x, ddy=a.y-y, ddz=a.z-z, d2=ddx*ddx+ddy*ddy+ddz*ddz;
+        if(d2>=LOOK*LOOK||d2>=sd) continue;
+        const dot=(ddx*dir.x+ddy*dir.y+ddz*dir.z)/(Math.sqrt(d2)||1);
+        if(dot<0.72){ sd=d2; side=i; }
+      }
+      if(side>=0){
+        const A2=ATT[side];
+        let sdir=new THREE.Vector3(A2.x-x,A2.y-y,A2.z-z).normalize();
+        sdir.x+= (rnd()-0.5)*0.5; sdir.y+=0.12; sdir.z+=(rnd()-0.5)*0.5; sdir.normalize();
+        const sx=x+sdir.x*STEP, sy=y+sdir.y*STEP, sz=z+sdir.z*STEP;
+        BR.push({ax:x,ay:y,az:z, bx:sx,by:sy,bz:sz, p:parentIdx, d:depth, len:STEP});
+        branch(sx,sy,sz,{x,y,z},depth+1,Math.floor(energy*0.5),BR.length-1);
+      }
+    }
+  }
+  branch(tip.x,tip.y,tip.z, {x:tip.x,y:tip.y-0.5,z:tip.z}, 6, 320, BR.length-1);
+}
+
+/* ================= 3D meshes ================= */
+/* branches: one unit cylinder instanced; per-branch matrix = position+orient+scale */
+const MAXB = 1400;
+const branchGeo = new THREE.CylinderGeometry(1, 1.25, 1, 5);   // tapered, low-poly
+branchGeo.translate(0, 0.5, 0);                                 // base at origin, grows +y
+const branchMat = new THREE.MeshLambertMaterial({color:'#4a3826'});
+const branches = new THREE.InstancedMesh(branchGeo, branchMat, MAXB);
+branches.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(branches);
+
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
+const UP = new THREE.Vector3(0,1,0);
+const _dir = new THREE.Vector3();
+function setBranch(i, b, thick){
+  _dir.set(b.bx-b.ax, b.by-b.ay, b.bz-b.az);
+  const len = _dir.length();
+  _q.setFromUnitVectors(UP, _dir.clone().normalize());
+  _p.set(b.ax, b.ay, b.az);
+  _s.set(thick, len, thick);
+  _m.compose(_p, _q, _s);
+  branches.setMatrixAt(i, _m);
+}
+
+/* leaves: instanced planes with per-instance color */
+const MAXL = 4200;
+const leafGeo = new THREE.PlaneGeometry(0.34, 0.42);
+const leafMat = new THREE.MeshBasicMaterial({side:THREE.DoubleSide, transparent:true, opacity:0.94});
+const leaves = new THREE.InstancedMesh(leafGeo, leafMat, MAXL);
+leaves.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(leaves);
+const LDATA = [];   // {x,y,z, phase, sway, sz, tone, branchIdx, falling, vx,vy,vz, rot}
+const _col = new THREE.Color();
+
+
+/* grass: instanced blades swaying with the wind */
+const MAXG = 2200;
+const grassGeo = new THREE.PlaneGeometry(0.16, 0.62);
+grassGeo.translate(0, 0.31, 0);                    // base at origin
+const grassMat = new THREE.MeshBasicMaterial({side:THREE.DoubleSide, transparent:true, opacity:0.92});
+const grass = new THREE.InstancedMesh(grassGeo, grassMat, MAXG);
+scene.add(grass);
+const GDATA = [];
+for(let i=0;i<MAXG;i++){
+  const a=rnd()*Math.PI*2, rr=2.5+Math.pow(rnd(),0.7)*23;   // ring around the tree, not on its trunk
+  GDATA.push({ x:Math.cos(a)*rr, z:Math.sin(a)*rr, h:0.55+rnd()*0.8, phase:rnd()*Math.PI*2, tone:rnd(), rot:rnd()*Math.PI });
+}
+const GRASS_SEASON = [ new THREE.Color('#3f7a3a'), new THREE.Color('#2f6e46'),
+                       new THREE.Color('#8a6b2f'), new THREE.Color('#5c6672') ];
+function updateGrass(t, sf, wind){
+  const si=Math.min(2,Math.floor(sf)), sff=sf-si;
+  const gc=GRASS_SEASON[si].clone().lerp(GRASS_SEASON[Math.min(3,si+1)], sff);
+  for(let i=0;i<MAXG;i++){
+    const g=GDATA[i];
+    const sway=Math.sin(t*2.1+g.phase+g.x*0.35)*(0.08+Math.abs(wind)*0.30) + wind*0.25;
+    _p.set(g.x, 0, g.z);
+    _q.setFromAxisAngle(UP, g.rot);
+    _s.set(1, g.h*(0.8+Math.abs(wind)*0.15), 1);
+    _m.compose(_p, _q, _s);
+    grass.setMatrixAt(i, _m);
+    _col.copy(gc).multiplyScalar(0.82+g.tone*0.36);
+    grass.setColorAt(i, _col);
+  }
+  grass.instanceMatrix.needsUpdate=true;
+  if(grass.instanceColor) grass.instanceColor.needsUpdate=true;
+}
+
+/* fruits: glowing instanced spheres */
+const MAXF = 90;
+const fruitGeo = new THREE.SphereGeometry(0.11, 6, 5);
+const fruitMat = new THREE.MeshBasicMaterial({color:'#ffd400'});
+const fruits = new THREE.InstancedMesh(fruitGeo, fruitMat, MAXF);
+scene.add(fruits);
+const FDATA = [];
+
+function sprout(){
+  LDATA.length=0; FDATA.length=0;
+  const hasChild = new Array(BR.length).fill(false);
+  for(const b of BR) if(b.p>=0) hasChild[b.p]=true;
+  for(let i=0;i<BR.length;i++){
+    const b=BR[i];
+    if(b.d<11 || hasChild[i]) continue;
+    const n = 5 + (rnd()*6|0);
+    for(let k=0;k<n;k++){
+      const a2=rnd()*Math.PI*2, rr=Math.pow(rnd(),0.5)*0.75;
+      LDATA.push({ x:b.bx+Math.cos(a2)*rr, y:b.by+(rnd()-0.5)*0.5, z:b.bz+Math.sin(a2)*rr,
+        phase:rnd()*Math.PI*2, sway:0.5+rnd(), tone:rnd(),
+        bi:i, falling:false, vx:0,vy:0,vz:0, rot:rnd()*Math.PI*2 });
+    }
+    if(b.d>=14 && rnd()<0.35 && FDATA.length<MAXF){
+      FDATA.push({x:b.bx, y:b.by-0.12, z:b.bz, phase:rnd()*Math.PI*2, gone:false, vy:0, vx:0, vz:0});
+    }
+  }
+  branches.count = BR.length;
+  leaves.count = Math.min(MAXL, LDATA.length);
+  fruits.count = FDATA.length;
+}
+
+/* season colors (instance colors) */
+const SEASON_LEAF = [ new THREE.Color('#7fc45f'), new THREE.Color('#3f9e46'),
+                      new THREE.Color('#e08a2e'), new THREE.Color('#cfd8de') ];
+const SEASON_SKY  = [ '#12202e', '#0e2233', '#241812', '#0a0e18' ];
+const SEASON_FOG  = [ '#16283a', '#12293b', '#3a2415', '#101622' ];
+
+/* wind + shake */
+let windX=0, shake=0, shakeCount=0;
+let mx=-1, my=-1;
+addEventListener('pointermove', e=>{ mx=e.clientX; my=e.clientY; }, {passive:true});
+/* layered gusts + a strong sweep every ~minute; cursor adds a light push */
+function windAt(t){
+  const gust = Math.sin(t*0.9)*0.35 + Math.sin(t*2.3+1.7)*0.18 + Math.sin(t*0.23)*0.6;
+  const blow = (Math.sin(t*0.11)>0.86) ? Math.sin(t*3.1)*0.9 : 0;
+  return gust + blow;
+}
+
+let AC=null;
+function chime(){
+  try{
+    AC = AC || new (window.AudioContext||window.webkitAudioContext)();
+    const t0=AC.currentTime;
+    for(let i=0;i<6;i++){
+      const o=AC.createOscillator(), g=AC.createGain();
+      o.type='triangle'; o.frequency.setValueAtTime(200+Math.random()*300, t0+i*0.035);
+      g.gain.setValueAtTime(0.04,t0+i*0.035); g.gain.exponentialRampToValueAtTime(0.0001,t0+i*0.035+0.12);
+      o.connect(g); g.connect(AC.destination); o.start(t0+i*0.035); o.stop(t0+i*0.035+0.13);
+    }
+  }catch(e){}
+}
+
+/* orbit + shake input */
+let drag=null;
+/* window-level pointerdown: <main> sections cover most of the screen (pointer-events:auto)
+   and swallowed canvas clicks — guard only real UI targets */
+addEventListener('pointerdown', e=>{
+  if(e.target.closest && e.target.closest('a,button,.card,#vine,#hud,#credit,#intro')) return;
+  drag={x:e.clientX,y:e.clientY,x0:e.clientX,y0:e.clientY,t:performance.now()};
+});
+addEventListener('pointermove', e=>{
+  if(!drag) return;
+  cam.tyaw   -= (e.clientX-drag.x)*0.005;
+  cam.tpitch += (e.clientY-drag.y)*0.004;
+  cam.tpitch = Math.max(-0.1, Math.min(0.9, cam.tpitch));
+  drag.x=e.clientX; drag.y=e.clientY;
+},{passive:true});
+addEventListener('pointerup', e=>{
+  if(!drag) return;
+  const md=Math.hypot(e.clientX-drag.x0, e.clientY-drag.y0), mt=performance.now()-drag.t;
+  if(md<6 && mt<400) tryShake(e.clientX, e.clientY);
+  drag=null;
+});
+addEventListener('wheel', e=>{ cam.tdist=Math.max(9,Math.min(30,cam.tdist+e.deltaY*0.01)); },{passive:true});
+
+function tryShake(px, py){
+  /* project crown center to screen; shake only if click near it */
+  const v=new THREE.Vector3(0,CROWN.y,0).project(camera);
+  const sx=(v.x*0.5+0.5)*innerWidth, sy=(-v.y*0.5+0.5)*innerHeight;
+  if(Math.hypot(px-sx,py-sy) < Math.min(innerWidth,innerHeight)*0.30){
+    shake=1; shakeCount++; chime();
+    document.getElementById('nstones').textContent = shakeCount;
+    let det=0;
+    for(const L of LDATA){
+      if(L.falling||det>60) continue;
+      if(Math.random()<0.06){ L.falling=true; L.vx=(rnd()-0.5)*3; L.vy=1+rnd()*2; L.vz=(rnd()-0.5)*3; det++; }
+    }
+    for(const F of FDATA){
+      if(!F.gone && Math.random()<0.3){ F.vy=2.5+rnd()*2; F.vx=(rnd()-0.5)*2; F.vz=(rnd()-0.5)*2; break; }
+    }
+      }
+}
+
+/* seasons from scroll */
+let scrollSeason=0, seasonF=0;
+function updateScroll(){
+  const max=document.documentElement.scrollHeight-innerHeight;
+  const p=Math.min(1,Math.max(0,scrollY/max));
+  scrollSeason=Math.min(3, p*4);
+  const idx=Math.round(scrollSeason);
+  document.querySelectorAll('#vine .node').forEach((n,i)=>n.classList.toggle('on',i===idx));
+  document.querySelectorAll('.season').forEach((s,i)=>s.classList.toggle('seen',i===idx));
+  document.getElementById('hero').classList.toggle('fade', p>0.06);
+}
+addEventListener('scroll', updateScroll, {passive:true});
+document.querySelectorAll('#vine .node').forEach((n,i)=>n.addEventListener('click',()=>{
+  document.querySelectorAll('main .season')[i].scrollIntoView({behavior:'smooth'});
+}));
+
+/* particles: fireflies (spring/summer) + snow (winter) */
+const fCount=90;
+const flyGeo=new THREE.SphereGeometry(0.05,4,3);
+const flyMat=new THREE.MeshBasicMaterial({color:'#ffd97a', transparent:true, opacity:0.9});
+const flies=new THREE.InstancedMesh(flyGeo,flyMat,fCount);
+scene.add(flies);
+const fliesD=Array.from({length:fCount},()=>({x:(rnd()-0.5)*18,y:1+rnd()*8,z:(rnd()-0.5)*18,p:rnd()*Math.PI*2,s:0.3+rnd()*0.8}));
+
+const sCount=420;
+const snowGeo=new THREE.SphereGeometry(0.045,4,3);
+const snowMat=new THREE.MeshBasicMaterial({color:'#dfe8f2', transparent:true, opacity:0.85});
+const snow=new THREE.InstancedMesh(snowGeo,snowMat,sCount);
+scene.add(snow);
+const snowD=Array.from({length:sCount},()=>({x:(rnd()-0.5)*26,y:rnd()*16,z:(rnd()-0.5)*26,v:1.2+rnd()*1.8,dx:rnd()*0.6-0.3}));
+
+/* moon */
+const moonMesh=new THREE.Mesh(new THREE.SphereGeometry(1.5,10,8), new THREE.MeshBasicMaterial({color:'#e8ecf4'}));
+moonMesh.position.set(-16,14,-22); scene.add(moonMesh);
+
+/* ================= animation ================= */
+let grown=0;    // growth reveal 0..1
+const _zero=new THREE.Vector3(0,-50,0);
+function animate(t, dt){
+  /* camera easing + slow drift */
+  cam.yaw += (cam.tyaw-cam.yaw)*0.08; cam.pitch += (cam.tpitch-cam.pitch)*0.08;
+  cam.dist += (cam.tdist-cam.dist)*0.08;
+  cam.tyaw += dt*0.012;
+  placeCam();
+
+  seasonF += (scrollSeason-seasonF)*0.03;
+  const sf=seasonF;
+  const si=Math.min(2,Math.floor(sf)), sff=sf-si;
+  const leafCol=SEASON_LEAF[si].clone().lerp(SEASON_LEAF[Math.min(3,si+1)], sff);
+  scene.background.lerp(new THREE.Color(SEASON_SKY[si]).lerp(new THREE.Color(SEASON_SKY[Math.min(3,si+1)]), sff), 0.03);
+  scene.fog.color.copy(scene.background);
+  const fruitVis=Math.max(0,Math.min(1,(sf-0.55)/0.5))*(1-Math.max(0,(sf-2.3)/0.7));
+  warm.intensity = 0.4 + fruitVis*1.6 + shake*2;
+
+  windX += (((mx>=0?(mx/innerWidth-0.5)*2:0)*0.55 + windAt(t)) - windX)*0.045;
+  shake *= 0.93;
+  const wind=windX + Math.sin(t*0.9)*0.28 + shake*2.4*Math.sin(t*30);
+  updateGrass(t, seasonF, wind);
+
+  /* branches reveal */
+  grown=Math.min(1, grown+0.006);
+  const nDraw=Math.floor(BR.length*grown);
+  for(let i=0;i<nDraw;i++){
+    const b=BR[i];
+    const thick=Math.max(0.03, 0.30*Math.pow(0.80,b.d));
+    const sway=(b.d/13)*wind*0.10;
+    _dir.set(b.bx-b.ax, b.by-b.ay, b.bz-b.az);
+    const len=_dir.length();
+    _q.setFromUnitVectors(UP, _dir.normalize());
+    _p.set(b.ax + sway*0.5, b.ay, b.az);
+    _s.set(thick, len, thick);
+    _m.compose(_p,_q,_s);
+    branches.setMatrixAt(i,_m);
+  }
+  branches.count=nDraw;
+  branches.instanceMatrix.needsUpdate=true;
+
+  /* leaves */
+  const fall=Math.max(0,sf-1.7)/1.3;
+  let li=0;
+  for(const L of LDATA){
+    if(li>=MAXL) break;
+    if(L.falling){
+      L.vy-=9.8*dt*0.35; L.x+=L.vx*dt+wind*0.12; L.y+=L.vy*dt; L.z+=L.vz*dt; L.rot+=dt*3;
+      if(L.y<0.05){ L.falling=false; L.vy=0; }
+    }
+    const px=L.x+Math.sin(t*1.5*L.sway+L.phase)*(0.10+Math.abs(wind)*0.06)+wind*(0.22+Math.abs(wind)*0.12);
+    const py=L.y+Math.cos(t*1.2*L.sway+L.phase)*0.10;
+    const pz=L.z+Math.cos(t*1.3*L.sway+L.phase)*0.10;
+    _q.setFromEuler(new THREE.Euler(0, L.phase+t*0.1*L.sway, Math.sin(t+L.phase)*0.3+wind*0.06));
+    const s=0.8+L.tone*0.5;
+    _s.set(s,s,s);
+    _p.set(px,py,pz);
+    _m.compose(_p,_q,_s);
+    leaves.setMatrixAt(li,_m);
+    _col.copy(leafCol);
+    _col.offsetHSL(0, 0, (L.tone-0.5)*0.10 - fall*0.1);
+    leaves.setColorAt(li,_col);
+    li++;
+  }
+  leaves.count=li;
+  leaves.instanceMatrix.needsUpdate=true;
+  if(leaves.instanceColor) leaves.instanceColor.needsUpdate=true;
+
+  /* fruits */
+  let fi=0;
+  for(const F of FDATA){
+    if(fi>=MAXF) break;
+    if(F.vy!==0){ F.vy-=9.8*dt*0.5; F.x+=F.vx*dt; F.y+=F.vy*dt; F.z+=F.vz*dt; if(F.y<0.12){F.vy=0;F.y=-30;} }
+    if(F.y<-20) continue;
+    const fx=F.x+Math.sin(t*1.2+F.phase)*0.06, fy=F.y+Math.sin(t+F.phase)*0.05;
+    _p.set(fx,fy,F.z); _q.identity(); _s.set(1,1,1);
+    _m.compose(_p,_q,_s);
+    fruits.setMatrixAt(fi,_m);
+    fi++;
+  }
+  fruits.count=fi;
+  fruits.instanceMatrix.needsUpdate=true;
+
+  /* fireflies (sf<2.2) */
+  const flyVis=Math.max(0,1-Math.max(0,(sf-2.0)/0.6));
+  flies.visible=flyVis>0.02;
+  if(flies.visible){
+    flies.material.opacity=0.85*flyVis;
+    for(let i=0;i<fCount;i++){
+      const F=fliesD[i];
+      F.x+=Math.sin(t*F.s+F.p)*0.008; F.y+=Math.cos(t*F.s*0.8+F.p)*0.006; F.z+=Math.cos(t*F.s+F.p*2)*0.008;
+      _p.set(F.x,F.y+Math.sin(t*1.4+F.p)*0.3,F.z); _q.identity(); _s.set(1,1,1);
+      _m.compose(_p,_q,_s); flies.setMatrixAt(i,_m);
+    }
+    flies.instanceMatrix.needsUpdate=true;
+  }
+  /* snow (sf>2.5) */
+  const snowVis=Math.max(0,(sf-2.5)/0.5);
+  snow.visible=snowVis>0.02;
+  if(snow.visible){
+    snow.material.opacity=0.85*Math.min(1,snowVis);
+    for(let i=0;i<sCount;i++){
+      const S=snowD[i];
+      S.y-=S.v*dt; S.x+=S.dx*dt+wind*0.05;
+      if(S.y<0){ S.y=15+rnd()*3; S.x=(rnd()-0.5)*26; S.z=(rnd()-0.5)*26; }
+      _p.set(S.x,S.y,S.z); _q.identity(); _s.set(1,1,1);
+      _m.compose(_p,_q,_s); snow.setMatrixAt(i,_m);
+    }
+    snow.instanceMatrix.needsUpdate=true;
+  }
+
+  renderer.render(scene,camera);
+}
+
+/* ================= loop (interval: throttle-proof) ================= */
+let last=performance.now();
+setInterval(()=>{
+  try{
+    const now=performance.now(), dt=Math.min(0.05,(now-last)/1000); last=now;
+    animate(now/1000, dt);
+    window.__frames++;
+  }catch(e){ window.__err=(window.__err||'')+e.message+' | '; }
+}, 33);
+
+/* ================= boot ================= */
+resize(); addEventListener('resize', resize); seedCrown(); growTree(); sprout(); updateScroll();
+const intro=document.getElementById('intro');
+function enter(){
+  if(intro.classList.contains('off')) return;
+  intro.classList.add('off');
+  grown=0;
+  setTimeout(()=>{ shake=0.9; chime();
+    for(const L of LDATA){ if(Math.random()<0.08){ L.falling=true; L.vx=(rnd()-0.5)*2; L.vy=1.5+rnd(); L.vz=(rnd()-0.5)*2; } }
+    document.getElementById('hint').classList.add('off');
+  }, 3400);
+}
+intro.addEventListener('click', enter);
+addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' ') enter(); });
+
+}catch(e){ window.__err='BOOT: '+e.message; }
+</script>
+</body>
+</html>
